@@ -49,3 +49,9 @@ gateway = ["dep:axum"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+proptest = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+# For the gateway HTTP tests (feature `gateway`): drive the axum Router in-process.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

@@ -1,17 +1,14 @@
-//! Integration test for the network-facing object verbs (`put_object` / `get_object` / ranged GET).
-//!
-//! These require a **running CE node** on `http://127.0.0.1:8844` with a writable blob store, so
-//! they are `#[ignore]` by default (the unit tests in `src/` cover everything that does not touch a
-//! node). Run against a live node with:
+//! Integration test for the network-facing object verbs against the operator's **default** node on
+//! `http://127.0.0.1:8844`. It stays `#[ignore]` because it targets that fixed shared node (which an
+//! automated run must not disturb). The equivalent coverage — full content-addressed round trip,
+//! multi-chunk object, ranged GET, dedup, copy, list, delete — now runs **un-ignored** against fresh
+//! ephemeral nodes in `tests/live.rs`, so this file is kept only as the "point me at an existing
+//! node" smoke test you can opt into with:
 //!
 //! ```text
-//! ce start &                       # in another shell; or point CE_API_TOKEN at one
-//! cargo test -p ce-storage -- --ignored --nocapture
+//! ce start &                       # or point CE_API_TOKEN at a node you control
+//! cargo test -p ce-storage --test integration -- --ignored --nocapture
 //! ```
-//!
-//! The test exercises the full content-addressed round trip: make a bucket, put a multi-chunk
-//! object, get it back byte-for-byte, fetch a sub-range, prove dedup (same bytes → same CID), copy
-//! by content address, list with a prefix, and delete.
 
 use ce_storage::store::Store;
 use std::path::PathBuf;
