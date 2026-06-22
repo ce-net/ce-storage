@@ -1,0 +1,51 @@
+[package]
+name = "ce-storage"
+version = "0.1.0"
+edition = "2024"
+description = "S3/GCS-compatible object store over CE content-addressed blobs — buckets, objects, ranged reads, and capability-scoped presigned-equivalent links. An application built ON CE primitives, not part of the node."
+license = "MIT"
+repository = "https://github.com/ce-net/ce-storage"
+keywords = ["ce", "s3", "object-store", "content-addressed", "p2p"]
+categories = ["command-line-utilities", "network-programming"]
+authors = ["Leif Rydenfalk <ledamecrydenfalk@gmail.com>"]
+
+# ce-storage is both a reusable library (the bucket index, object model, S3 verb mapping,
+# capability links) and the `ce-storage` CLI binary over it. The library is unit-tested; the
+# binary and the optional HTTP gateway are thin shells around it.
+[lib]
+name = "ce_storage"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ce-storage"
+path = "src/main.rs"
+
+[dependencies]
+# The CE SDK: blobs/objects (put_blob/get_blob/put_object/get_object), content-addressing.
+ce-rs = { path = "../ce-rs" }
+# The capability verifier primitive — bucket/prefix scoping + presigned-equivalent access links.
+ce-cap = { path = "../ce/crates/ce-cap" }
+# Identity: minting capability links requires a signing key; loaded from the CE data dir.
+ce-identity = { path = "../ce/crates/ce-identity" }
+
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+sha2 = "0.10"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "5"
+# Optional tiny HTTP gateway exposing an S3-subset so existing S3 clients work.
+axum = { version = "0.7", optional = true }
+
+[features]
+default = []
+# Build the `ce-storage gateway` subcommand (a tiny S3-subset HTTP server). Off by default so the
+# core library + CLI stay dependency-light; turn on with `--features gateway`.
+gateway = ["dep:axum"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
