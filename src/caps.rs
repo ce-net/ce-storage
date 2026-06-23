@@ -57,10 +57,22 @@ impl Scope {
     }
 }
 
-/// Does this scope permit access to `bucket/key`? True iff the bucket matches and the key starts
-/// with the scope's prefix. This is the app caveat enforcement that `ce-cap` defers to the action.
+/// Does this scope permit access to `bucket/key`? True iff the bucket matches and the key falls
+/// under the scope's prefix at a path boundary. This is the app caveat enforcement that `ce-cap`
+/// defers to the action.
+///
+/// The prefix is matched on `/`-delimited path segments, not raw bytes: scope `photos` covers
+/// `photos` and `photos/a` but NOT `photos-secret/x`. Trailing slashes on the prefix are
+/// normalized away so `photos` and `photos/` behave identically. An empty prefix covers the
+/// whole bucket.
 pub fn scope_allows(scope: &Scope, bucket: &str, key: &str) -> bool {
-    scope.bucket == bucket && key.starts_with(&scope.prefix)
+    if scope.bucket != bucket {
+        return false;
+    }
+    let prefix = scope.prefix.trim_end_matches('/');
+    prefix.is_empty()
+        || key == prefix
+        || key.starts_with(&format!("{prefix}/"))
 }
 
 /// Mint a presigned-equivalent access link: a single self-issued capability granting `ability` on
@@ -189,6 +201,39 @@ mod tests {
         assert!(scope_allows(&s, "photos", "2026/a.jpg"));
         assert!(!scope_allows(&s, "photos", "2025/a.jpg"));
         assert!(!scope_allows(&s, "docs", "2026/a.jpg"));
+    }
+
+    #[test]
+    fn scope_enforces_path_boundary() {
+        // Regression for H4: a `photos` scope must NOT leak into a sibling bucket-key namespace
+        // like `photos-secret/`. The old `starts_with` check allowed this; the boundary-aware
+        // check denies it while still covering `photos/a` and the bare `photos` key.
+        let s = Scope {
+            bucket: "b".into(),
+            prefix: "photos".into(),
+        };
+        // The hole: `photos-secret/x` starts with `photos` but is a different path segment.
+        assert!(
+            !scope_allows(&s, "b", "photos-secret/x"),
+            "scope `photos` must not grant `photos-secret/x`"
+        );
+        // Still allows keys genuinely under (or equal to) the prefix.
+        assert!(scope_allows(&s, "b", "photos/a"), "scope `photos` must grant `photos/a`");
+        assert!(scope_allows(&s, "b", "photos"), "scope `photos` must grant bare `photos`");
+        // Trailing-slash normalization: `photos/` behaves identically to `photos`.
+        let s_slash = Scope {
+            bucket: "b".into(),
+            prefix: "photos/".into(),
+        };
+        assert!(!scope_allows(&s_slash, "b", "photos-secret/x"));
+        assert!(scope_allows(&s_slash, "b", "photos/a"));
+        assert!(scope_allows(&s_slash, "b", "photos"));
+        // Empty prefix covers the whole bucket.
+        let s_all = Scope {
+            bucket: "b".into(),
+            prefix: String::new(),
+        };
+        assert!(scope_allows(&s_all, "b", "anything/at/all"));
     }
 
     #[test]
