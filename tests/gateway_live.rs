@@ -15,7 +15,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use ce_storage::gateway::Gateway;
 use ce_storage::store::Store;
-use harness::{live_available, Node};
+use harness::{Node, live_available};
 use http_body_util::BodyExt;
 use std::path::PathBuf;
 use tower::ServiceExt;
@@ -51,7 +51,12 @@ async fn gateway_s3_verb_roundtrip() -> anyhow::Result<()> {
     let resp = gw
         .clone()
         .router()
-        .oneshot(Request::builder().method("PUT").uri("/photos").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/photos")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(resp.status(), StatusCode::OK);
 
@@ -59,7 +64,12 @@ async fn gateway_s3_verb_roundtrip() -> anyhow::Result<()> {
     let resp = gw
         .clone()
         .router()
-        .oneshot(Request::builder().method("PUT").uri("/photos").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/photos")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(resp.status(), StatusCode::CONFLICT);
 
@@ -77,13 +87,21 @@ async fn gateway_s3_verb_roundtrip() -> anyhow::Result<()> {
         )
         .await?;
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp.headers().get("etag").is_some(), "PutObject returns an ETag");
+    assert!(
+        resp.headers().get("etag").is_some(),
+        "PutObject returns an ETag"
+    );
 
     // GetObject (full): GET /photos/a.txt
     let resp = gw
         .clone()
         .router()
-        .oneshot(Request::builder().method("GET").uri("/photos/a.txt").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/photos/a.txt")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(resp.headers().get("accept-ranges").unwrap(), "bytes");
@@ -103,7 +121,12 @@ async fn gateway_s3_verb_roundtrip() -> anyhow::Result<()> {
         )
         .await?;
     assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
-    let cr = resp.headers().get("content-range").unwrap().to_str()?.to_string();
+    let cr = resp
+        .headers()
+        .get("content-range")
+        .unwrap()
+        .to_str()?
+        .to_string();
     assert_eq!(cr, "bytes 0-9/1500");
     let bytes = resp.into_body().collect().await?.to_bytes();
     assert_eq!(bytes.len(), 10);
@@ -112,7 +135,12 @@ async fn gateway_s3_verb_roundtrip() -> anyhow::Result<()> {
     let resp = gw
         .clone()
         .router()
-        .oneshot(Request::builder().method("HEAD").uri("/photos/a.txt").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri("/photos/a.txt")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(resp.headers().get("content-length").unwrap(), "1500");
@@ -130,13 +158,21 @@ async fn gateway_s3_verb_roundtrip() -> anyhow::Result<()> {
         .await?;
     assert_eq!(resp.status(), StatusCode::OK);
     let xml = body_string(resp).await;
-    assert!(xml.contains("<Key>a.txt</Key>"), "list XML must contain the key: {xml}");
+    assert!(
+        xml.contains("<Key>a.txt</Key>"),
+        "list XML must contain the key: {xml}"
+    );
 
     // GetObject on a missing key → 404.
     let resp = gw
         .clone()
         .router()
-        .oneshot(Request::builder().method("GET").uri("/photos/missing.txt").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/photos/missing.txt")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
@@ -144,24 +180,42 @@ async fn gateway_s3_verb_roundtrip() -> anyhow::Result<()> {
     let resp = gw
         .clone()
         .router()
-        .oneshot(Request::builder().method("DELETE").uri("/photos/a.txt").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/photos/a.txt")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     let resp = gw
         .clone()
         .router()
-        .oneshot(Request::builder().method("HEAD").uri("/photos/a.txt").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri("/photos/a.txt")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     // ListBuckets: GET / → XML with the bucket name.
     let resp = gw
         .router()
-        .oneshot(Request::builder().method("GET").uri("/").body(Body::empty())?)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/")
+                .body(Body::empty())?,
+        )
         .await?;
     assert_eq!(resp.status(), StatusCode::OK);
     let xml = body_string(resp).await;
-    assert!(xml.contains("<Name>photos</Name>"), "ListBuckets XML must contain the bucket");
+    assert!(
+        xml.contains("<Name>photos</Name>"),
+        "ListBuckets XML must contain the bucket"
+    );
 
     let _ = std::fs::remove_file(&index_path);
     Ok(())

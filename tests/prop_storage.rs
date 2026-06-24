@@ -12,12 +12,13 @@
 //!    continuation token; pagination over a random key set returns each key exactly once, in order.
 //! 4. **Serde round-trips** are lossless for `ObjectMeta` / `Index` (incl. sizes `> 2^53`, which a
 //!    naive JSON-number-as-f64 path would corrupt — money/size are u64 base units here).
-//! 5. **Scope parsing/checking** round-trips and the `scope_allows` predicate is exactly
-//!    "same bucket AND key starts with prefix".
+//! 5. **Scope parsing/checking** round-trips and the `scope_allows` predicate matches the
+//!    *boundary-aware* rule (same bucket AND key == prefix OR key under `prefix/`) — NOT raw
+//!    `starts_with`, so a `photos` scope never leaks into `photos-secret/`.
 
 use ce_rs::data;
-use ce_storage::caps::{scope_allows, Scope};
-use ce_storage::index::{valid_bucket_name, valid_key, Index, ObjectMeta};
+use ce_storage::caps::{Scope, scope_allows};
+use ce_storage::index::{Index, ObjectMeta, valid_bucket_name, valid_key};
 use ce_storage::range::{covering, parse_range, slice};
 use proptest::prelude::*;
 
@@ -159,6 +160,45 @@ proptest! {
         }
     }
 
+    /// ObjectMeta with arbitrary user metadata + optional headers round-trips through JSON losslessly.
+    #[test]
+    fn object_meta_with_metadata_roundtrips(
+        entries in proptest::collection::vec(("[a-z]{1,6}", "[a-z0-9 ]{0,12}"), 0..8),
+        size in any::<u64>(),
+        cc in proptest::option::of("[a-z=0-9-]{0,16}"),
+    ) {
+        let mut map = std::collections::BTreeMap::new();
+        for (k, v) in entries { map.insert(k, v); }
+        let m = ObjectMeta::new("cid", size, "text/plain", 1)
+            .with(map.clone(), cc.clone(), None, None)
+            .unwrap();
+        let json = serde_json::to_string(&m).unwrap();
+        let back: ObjectMeta = serde_json::from_str(&json).unwrap();
+        prop_assert_eq!(&back.metadata, &map);
+        prop_assert_eq!(&back.cache_control, &cc);
+        prop_assert_eq!(back.version_id, m.version_id);
+    }
+
+    /// Versioning invariant: on a versioned bucket, after a sequence of puts the current object is
+    /// always the most recently written, and every written CID is retrievable by version id.
+    #[test]
+    fn versioning_current_is_newest(
+        cids in proptest::collection::vec("[a-f0-9]{6,10}", 1..8),
+    ) {
+        let mut idx = Index::default();
+        idx.make_bucket("buk", 1).unwrap();
+        idx.set_versioning("buk", true).unwrap();
+        for (i, c) in cids.iter().enumerate() {
+            idx.put("buk", "k", ObjectMeta::new(c.clone(), i as u64, "x", i as u64)).unwrap();
+        }
+        // Current == last written.
+        prop_assert_eq!(&idx.head("buk", "k").unwrap().cid, cids.last().unwrap());
+        // Every distinct cid is retrievable by version id.
+        for c in &cids {
+            prop_assert!(idx.head_version("buk", "k", c).is_ok(), "version {} retrievable", c);
+        }
+    }
+
     // ----- Invariant 5: scope parse round-trip + allow predicate. -----
 
     #[test]
@@ -174,9 +214,31 @@ proptest! {
         let back = Scope::from_caveat(&s.to_caveat());
         prop_assert_eq!(&back.bucket, &bucket);
 
-        // allow == same bucket AND key starts with prefix.
-        let want = test_bucket == bucket && test_key.starts_with(&prefix);
+        // The invariant must match the *boundary-aware* `scope_allows`, NOT raw starts_with:
+        // a scope `a` covers `a` and `a/...` but never `ab`. Mirror that rule exactly so the
+        // generator can't produce a `prefix='a', key='ab'` case that disagrees with the impl.
+        let np = prefix.trim_end_matches('/');
+        let want = test_bucket == bucket
+            && (np.is_empty() || test_key == np || test_key.starts_with(&format!("{np}/")));
         prop_assert_eq!(scope_allows(&s, &test_bucket, &test_key), want);
+    }
+
+    /// Targeted boundary cases the random generator rarely hits: prefix `a` vs key `ab` must be
+    /// denied (it shares a byte prefix but is a different path segment), while `a` and `a/x` pass.
+    #[test]
+    fn scope_boundary_denies_sibling_segments(
+        prefix in "[a-z]{1,4}",
+        suffix in "[a-z]{1,4}",
+    ) {
+        let s = Scope { bucket: "b".into(), prefix: prefix.clone() };
+        // Same-segment sibling: prefix + extra letters (no '/') must be denied unless suffix empty.
+        let sibling = format!("{prefix}{suffix}");
+        prop_assert!(!scope_allows(&s, "b", &sibling), "{} must not cover sibling {}", prefix, sibling);
+        // Genuine child under the prefix is allowed.
+        let child = format!("{prefix}/{suffix}");
+        prop_assert!(scope_allows(&s, "b", &child));
+        // The bare prefix itself is allowed.
+        prop_assert!(scope_allows(&s, "b", &prefix));
     }
 
     // ----- Validators never panic and agree with their stated rules. -----
@@ -189,5 +251,44 @@ proptest! {
     #[test]
     fn valid_key_never_panics(key in ".{0,2048}") {
         let _ = valid_key(&key);
+    }
+
+    // ----- Lifecycle expiry is monotone and matches the prefix rule. -----
+
+    /// `expired_keys` returns exactly the keys (a) covered by the first matching rule and (b) older
+    /// than its TTL — and the result is monotone in `now` (once expired, always expired). Generated
+    /// over a random key set, a random prefix, and a random TTL.
+    #[test]
+    fn lifecycle_expiry_is_monotone_and_prefix_scoped(
+        keys in prop::collection::vec("[a-z][a-z0-9/]{0,6}", 0..12),
+        prefix in "[a-z]{0,3}",
+        ttl in 1u64..1000,
+        written in 0u64..1000,
+        now1 in 0u64..3000,
+    ) {
+        let mut idx = Index::default();
+        idx.make_bucket("buk", 0).unwrap();
+        for k in &keys {
+            // valid_key rejects empty; skip those the generator may produce.
+            if k.is_empty() { continue; }
+            let _ = idx.put("buk", k, ObjectMeta::new("c", 1, "x", written));
+        }
+        idx.set_lifecycle("buk", vec![ce_storage::index::LifecycleRule {
+            prefix: prefix.clone(),
+            expiration_secs: ttl,
+        }]).unwrap();
+
+        let expired = idx.expired_keys("buk", now1).unwrap();
+        // Every expired key must be covered by the prefix and genuinely past its TTL.
+        for k in &expired {
+            prop_assert!(prefix.is_empty() || k.starts_with(&prefix),
+                "expired key {} not covered by prefix {}", k, prefix);
+            prop_assert!(now1 >= written + ttl, "expired before TTL elapsed");
+        }
+        // Monotonicity: at a strictly later time, the expired set only grows.
+        let later = idx.expired_keys("buk", now1.saturating_add(ttl)).unwrap();
+        for k in &expired {
+            prop_assert!(later.contains(k), "key {} un-expired as time advanced", k);
+        }
     }
 }

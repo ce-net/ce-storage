@@ -32,14 +32,12 @@ fn offset() -> u16 {
 }
 
 fn free_api_port() -> u16 {
-    let _ = API_PORT
-        .compare_exchange(18910, 18910 + offset(), Ordering::SeqCst, Ordering::SeqCst);
+    let _ = API_PORT.compare_exchange(18910, 18910 + offset(), Ordering::SeqCst, Ordering::SeqCst);
     free_port(&API_PORT, 18910, 18999, false)
 }
 
 fn free_p2p_port() -> u16 {
-    let _ = P2P_PORT
-        .compare_exchange(14910, 14910 + offset(), Ordering::SeqCst, Ordering::SeqCst);
+    let _ = P2P_PORT.compare_exchange(14910, 14910 + offset(), Ordering::SeqCst, Ordering::SeqCst);
     free_port(&P2P_PORT, 14910, 14999, true)
 }
 

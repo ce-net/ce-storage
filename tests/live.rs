@@ -22,9 +22,9 @@ mod harness;
 
 use std::path::PathBuf;
 
-use ce_storage::caps::{mint_link, verify_link, Scope, ABILITY_READ, ABILITY_WRITE};
-use ce_storage::store::Store;
-use harness::{live_available, Node};
+use ce_storage::caps::{ABILITY_READ, ABILITY_WRITE, Scope, mint_link, verify_link};
+use ce_storage::store::{Preconditions, PutOptions, Store};
+use harness::{Node, live_available};
 
 fn temp_index(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -55,14 +55,22 @@ async fn live_full_object_lifecycle_multichunk() -> anyhow::Result<()> {
     let payload: Vec<u8> = (0..2_500_000u32).map(|i| (i % 251) as u8).collect();
 
     let meta = store
-        .put_object(bucket, "data/blob.bin", &payload, "application/octet-stream")
+        .put_object(
+            bucket,
+            "data/blob.bin",
+            &payload,
+            "application/octet-stream",
+        )
         .await?;
     assert_eq!(meta.size, payload.len() as u64);
     assert_eq!(meta.etag, meta.cid, "ETag must be the content address");
 
     // Full GET round-trips byte-for-byte.
     let got = store.get_object(bucket, "data/blob.bin").await?;
-    assert_eq!(got.bytes, payload, "full multi-chunk object must match exactly");
+    assert_eq!(
+        got.bytes, payload,
+        "full multi-chunk object must match exactly"
+    );
     assert_eq!(got.etag, meta.cid);
 
     // Ranged GET across a chunk boundary returns exactly the window.
@@ -74,10 +82,14 @@ async fn live_full_object_lifecycle_multichunk() -> anyhow::Result<()> {
 
     // A tiny (single inline blob) object also round-trips and ranges.
     let small = b"hello world".to_vec();
-    store.put_object(bucket, "small.txt", &small, "text/plain").await?;
+    store
+        .put_object(bucket, "small.txt", &small, "text/plain")
+        .await?;
     let sg = store.get_object(bucket, "small.txt").await?;
     assert_eq!(sg.bytes, small);
-    let sr = store.get_object_range(bucket, "small.txt", "bytes=0-4").await?;
+    let sr = store
+        .get_object_range(bucket, "small.txt", "bytes=0-4")
+        .await?;
     assert_eq!(sr.bytes, b"hello");
 
     // List with the shared prefix sees both data/ keys (not small.txt).
@@ -111,11 +123,20 @@ async fn live_cid_integrity_and_dedup() -> anyhow::Result<()> {
     let mut b = a.clone();
     b[123_456] ^= 0xff; // flip one byte deep inside
 
-    let m_a = store.put_object(bucket, "a.bin", &a, "application/octet-stream").await?;
-    let m_a2 = store.put_object(bucket, "a-copy.bin", &a, "application/octet-stream").await?;
-    let m_b = store.put_object(bucket, "b.bin", &b, "application/octet-stream").await?;
+    let m_a = store
+        .put_object(bucket, "a.bin", &a, "application/octet-stream")
+        .await?;
+    let m_a2 = store
+        .put_object(bucket, "a-copy.bin", &a, "application/octet-stream")
+        .await?;
+    let m_b = store
+        .put_object(bucket, "b.bin", &b, "application/octet-stream")
+        .await?;
 
-    assert_eq!(m_a.cid, m_a2.cid, "identical bytes must share a content address (dedup)");
+    assert_eq!(
+        m_a.cid, m_a2.cid,
+        "identical bytes must share a content address (dedup)"
+    );
     assert_ne!(m_a.cid, m_b.cid, "one flipped byte must change the CID");
 
     // CopyObject shares the CID; both keys resolve to the same bytes.
@@ -143,7 +164,70 @@ async fn live_missing_objects_error_gracefully() -> anyhow::Result<()> {
     assert!(store.get_object("ghost-bucket", "k").await.is_err());
     store.make_bucket("present")?;
     assert!(store.get_object("present", "absent-key").await.is_err());
-    assert!(store.put_object("ghost-bucket", "k", b"x", "text/plain").await.is_err());
+    assert!(
+        store
+            .put_object("ghost-bucket", "k", b"x", "text/plain")
+            .await
+            .is_err()
+    );
+
+    let _ = std::fs::remove_file(&index_path);
+    Ok(())
+}
+
+/// Versioning, user metadata, and conditional requests round-trip against a real node.
+#[tokio::test]
+async fn live_versioning_metadata_and_conditionals() -> anyhow::Result<()> {
+    if !live_available() {
+        return Ok(());
+    }
+    let node = Node::start(None).await?;
+    let index_path = temp_index("vmc");
+    let _ = std::fs::remove_file(&index_path);
+    let mut store = Store::with_client(node.client.clone(), index_path.clone())?;
+    store.make_bucket("vb")?;
+    store.set_versioning("vb", true)?;
+
+    // Put with user metadata + cache-control.
+    let mut meta_map = std::collections::BTreeMap::new();
+    meta_map.insert("author".to_string(), "leif".to_string());
+    let opts = PutOptions {
+        content_type: "text/plain".into(),
+        metadata: meta_map.clone(),
+        cache_control: Some("max-age=30".into()),
+        ..Default::default()
+    };
+    let v1 = store.put_object_opts("vb", "k", b"one", &opts).await?;
+    let _v2 = store.put_object("vb", "k", b"two", "text/plain").await?;
+
+    // Current is "two"; the old version "one" is retrievable by id, with its metadata.
+    let cur = store.get_object("vb", "k").await?;
+    assert_eq!(cur.bytes, b"two");
+    let old = store
+        .get_object_opts("vb", "k", Some(&v1.version_id), &Preconditions::default())
+        .await?;
+    assert_eq!(old.bytes, b"one");
+    assert_eq!(old.metadata.get("author").map(String::as_str), Some("leif"));
+    assert_eq!(old.cache_control.as_deref(), Some("max-age=30"));
+
+    // Conditional GET: If-None-Match with the current etag → NotModified.
+    let pc = Preconditions {
+        if_none_match: Some(cur.etag.clone()),
+        ..Default::default()
+    };
+    let r = store.get_object_opts("vb", "k", None, &pc).await;
+    assert!(
+        matches!(r, Err(ce_storage::store::StorageError::NotModified)),
+        "matching If-None-Match must be NotModified"
+    );
+
+    // Delete adds a marker; current hidden, old version survives.
+    store.delete_object("vb", "k")?;
+    assert!(store.head_object("vb", "k").is_err());
+    let still = store
+        .get_object_opts("vb", "k", Some(&v1.version_id), &Preconditions::default())
+        .await?;
+    assert_eq!(still.bytes, b"one");
 
     let _ = std::fs::remove_file(&index_path);
     Ok(())
@@ -163,33 +247,137 @@ async fn live_capability_bucket_scope() -> anyhow::Result<()> {
     // Load the node's own identity (the bucket owner / trust root for this scope).
     let owner = ce_identity::Identity::load_or_generate(&node.data_dir_path.join("identity"))?;
 
-    let scope = Scope { bucket: "photos".into(), prefix: "2026/".into() };
+    let scope = Scope {
+        bucket: "photos".into(),
+        prefix: "2026/".into(),
+    };
     let token = mint_link(&owner, owner.node_id(), ABILITY_READ, &scope, 0, 1)?;
     let never = |_: &ce_identity::NodeId, _: u64| false;
 
     // In scope: read photos/2026/* → ok.
-    assert!(verify_link(
-        &owner.node_id(), &[], &[], 1000, &owner.node_id(),
-        ABILITY_READ, "photos", "2026/sunset.jpg", &token, &never,
-    ).is_ok());
+    assert!(
+        verify_link(
+            &owner.node_id(),
+            &[],
+            &[],
+            1000,
+            &owner.node_id(),
+            ABILITY_READ,
+            "photos",
+            "2026/sunset.jpg",
+            &token,
+            &never,
+        )
+        .is_ok()
+    );
 
     // Wrong prefix → denied.
-    assert!(verify_link(
-        &owner.node_id(), &[], &[], 1000, &owner.node_id(),
-        ABILITY_READ, "photos", "2025/private.jpg", &token, &never,
-    ).is_err());
+    assert!(
+        verify_link(
+            &owner.node_id(),
+            &[],
+            &[],
+            1000,
+            &owner.node_id(),
+            ABILITY_READ,
+            "photos",
+            "2025/private.jpg",
+            &token,
+            &never,
+        )
+        .is_err()
+    );
 
     // Wrong bucket → denied.
-    assert!(verify_link(
-        &owner.node_id(), &[], &[], 1000, &owner.node_id(),
-        ABILITY_READ, "documents", "2026/sunset.jpg", &token, &never,
-    ).is_err());
+    assert!(
+        verify_link(
+            &owner.node_id(),
+            &[],
+            &[],
+            1000,
+            &owner.node_id(),
+            ABILITY_READ,
+            "documents",
+            "2026/sunset.jpg",
+            &token,
+            &never,
+        )
+        .is_err()
+    );
 
     // Wrong ability (write against a read link) → denied.
-    assert!(verify_link(
-        &owner.node_id(), &[], &[], 1000, &owner.node_id(),
-        ABILITY_WRITE, "photos", "2026/sunset.jpg", &token, &never,
-    ).is_err());
+    assert!(
+        verify_link(
+            &owner.node_id(),
+            &[],
+            &[],
+            1000,
+            &owner.node_id(),
+            ABILITY_WRITE,
+            "photos",
+            "2026/sunset.jpg",
+            &token,
+            &never,
+        )
+        .is_err()
+    );
+
+    drop(node);
+    Ok(())
+}
+
+/// Lifecycle / TTL expiry against a live node: a real object is stored, a short TTL rule is set,
+/// and after the TTL elapses `sweep_expired` actually deletes it (and is idempotent). A fresh object
+/// written after the sweep survives. Exercises the real put → index → sweep → delete path end to end.
+#[tokio::test]
+async fn live_lifecycle_sweep_expires_objects() -> anyhow::Result<()> {
+    if !live_available() {
+        return Ok(());
+    }
+    let node = Node::start(None).await?;
+    let index_path = temp_index("lifecycle");
+    let _ = std::fs::remove_file(&index_path);
+    let mut store = Store::with_client(node.client.clone(), index_path.clone())?;
+
+    let bucket = "live-lifecycle";
+    store.make_bucket(bucket)?;
+
+    // Store a real object through the node (content-addressed).
+    store
+        .put_object(bucket, "tmp/ephemeral.txt", b"will expire", "text/plain")
+        .await?;
+    assert!(store.head_object(bucket, "tmp/ephemeral.txt").is_ok());
+
+    // 1-second TTL over the tmp/ prefix.
+    store.set_lifecycle(
+        bucket,
+        vec![ce_storage::index::LifecycleRule {
+            prefix: "tmp/".into(),
+            expiration_secs: 1,
+        }],
+    )?;
+
+    // Before the TTL elapses nothing is expired.
+    assert!(store.expired_keys(bucket)?.is_empty(), "not yet expired");
+
+    // Wait out the TTL, then sweep — the object must be deleted.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let deleted = store.sweep_expired(bucket)?;
+    assert_eq!(deleted, vec!["tmp/ephemeral.txt".to_string()]);
+    assert!(
+        store.head_object(bucket, "tmp/ephemeral.txt").is_err(),
+        "swept object is gone"
+    );
+
+    // Idempotent: a second sweep deletes nothing.
+    assert!(store.sweep_expired(bucket)?.is_empty());
+
+    // A freshly written object under the same prefix is not immediately expired.
+    store
+        .put_object(bucket, "tmp/fresh.txt", b"new", "text/plain")
+        .await?;
+    assert!(store.sweep_expired(bucket)?.is_empty(), "fresh object kept");
+    assert!(store.head_object(bucket, "tmp/fresh.txt").is_ok());
 
     drop(node);
     Ok(())

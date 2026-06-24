@@ -45,14 +45,22 @@ async fn full_object_roundtrip_against_node() {
     let payload: Vec<u8> = (0..2_500_000u32).map(|i| (i % 251) as u8).collect();
 
     let meta = store
-        .put_object(&bucket, "data/blob.bin", &payload, "application/octet-stream")
+        .put_object(
+            &bucket,
+            "data/blob.bin",
+            &payload,
+            "application/octet-stream",
+        )
         .await
         .expect("put_object");
     assert_eq!(meta.size, payload.len() as u64);
     assert_eq!(meta.etag, meta.cid, "ETag is the content address");
 
     // Full GET round-trips byte-for-byte.
-    let got = store.get_object(&bucket, "data/blob.bin").await.expect("get");
+    let got = store
+        .get_object(&bucket, "data/blob.bin")
+        .await
+        .expect("get");
     assert_eq!(got.bytes, payload, "full object must match");
 
     // Ranged GET returns exactly the requested window, fetching only covering chunks.
@@ -65,10 +73,18 @@ async fn full_object_roundtrip_against_node() {
 
     // Dedup: identical bytes under a second key resolve to the same CID.
     let meta2 = store
-        .put_object(&bucket, "data/copy.bin", &payload, "application/octet-stream")
+        .put_object(
+            &bucket,
+            "data/copy.bin",
+            &payload,
+            "application/octet-stream",
+        )
         .await
         .expect("put dup");
-    assert_eq!(meta.cid, meta2.cid, "identical bytes share a content address");
+    assert_eq!(
+        meta.cid, meta2.cid,
+        "identical bytes share a content address"
+    );
 
     // CopyObject shares the CID with no upload.
     store

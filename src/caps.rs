@@ -27,6 +27,19 @@ pub const ABILITY_READ: &str = "storage:read";
 /// Ability string: write/delete objects under the scoped prefix.
 pub const ABILITY_WRITE: &str = "storage:write";
 
+/// Parse a 64-hex node id string into a [`NodeId`] (`[u8; 32]`). Used by the gateway to identify the
+/// presenting requester from a header, and by the CLI to bind a link to a specific audience.
+pub fn parse_node_id(hex_str: &str) -> Result<NodeId> {
+    let bytes = hex::decode(hex_str.trim()).context("node id must be hex")?;
+    let arr: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+        anyhow::anyhow!(
+            "node id must be 32 bytes (64 hex chars), got {}",
+            bytes.len()
+        )
+    })?;
+    Ok(arr)
+}
+
 /// A parsed storage access scope: which bucket and key-prefix a capability covers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope {
@@ -65,14 +78,22 @@ impl Scope {
 /// `photos` and `photos/a` but NOT `photos-secret/x`. Trailing slashes on the prefix are
 /// normalized away so `photos` and `photos/` behave identically. An empty prefix covers the
 /// whole bucket.
+///
+/// ```
+/// use ce_storage::caps::{Scope, scope_allows};
+/// let scope = Scope { bucket: "photos".into(), prefix: "2026".into() };
+/// assert!(scope_allows(&scope, "photos", "2026"));        // the bare prefix key
+/// assert!(scope_allows(&scope, "photos", "2026/a.jpg"));  // a child under the prefix
+/// assert!(!scope_allows(&scope, "photos", "2025/x"));     // different prefix
+/// assert!(!scope_allows(&scope, "photos", "2026-raw/x")); // sibling segment, NOT covered
+/// assert!(!scope_allows(&scope, "docs", "2026/a.jpg"));   // different bucket
+/// ```
 pub fn scope_allows(scope: &Scope, bucket: &str, key: &str) -> bool {
     if scope.bucket != bucket {
         return false;
     }
     let prefix = scope.prefix.trim_end_matches('/');
-    prefix.is_empty()
-        || key == prefix
-        || key.starts_with(&format!("{prefix}/"))
+    prefix.is_empty() || key == prefix || key.starts_with(&format!("{prefix}/"))
 }
 
 /// Mint a presigned-equivalent access link: a single self-issued capability granting `ability` on
@@ -179,7 +200,8 @@ mod tests {
     use ce_identity::Identity;
 
     fn ident(seed: &str) -> Identity {
-        let dir = std::env::temp_dir().join(format!("ce-storage-cap-{}-{}", seed, std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ce-storage-cap-{}-{}", seed, std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let id = Identity::load_or_generate(&dir).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
@@ -218,8 +240,14 @@ mod tests {
             "scope `photos` must not grant `photos-secret/x`"
         );
         // Still allows keys genuinely under (or equal to) the prefix.
-        assert!(scope_allows(&s, "b", "photos/a"), "scope `photos` must grant `photos/a`");
-        assert!(scope_allows(&s, "b", "photos"), "scope `photos` must grant bare `photos`");
+        assert!(
+            scope_allows(&s, "b", "photos/a"),
+            "scope `photos` must grant `photos/a`"
+        );
+        assert!(
+            scope_allows(&s, "b", "photos"),
+            "scope `photos` must grant bare `photos`"
+        );
         // Trailing-slash normalization: `photos/` behaves identically to `photos`.
         let s_slash = Scope {
             bucket: "b".into(),
@@ -329,6 +357,19 @@ mod tests {
             &never_revoked,
         );
         assert!(r.is_err(), "expired link must be rejected");
+    }
+
+    #[test]
+    fn parse_node_id_roundtrips_and_rejects_bad() {
+        let owner = ident("nid");
+        let hex = owner.node_id_hex();
+        assert_eq!(parse_node_id(&hex).unwrap(), owner.node_id());
+        assert!(parse_node_id("not-hex").is_err());
+        assert!(parse_node_id("deadbeef").is_err(), "wrong length rejected");
+        assert!(
+            parse_node_id(&format!("  {hex}  ")).is_ok(),
+            "whitespace trimmed"
+        );
     }
 
     #[test]

@@ -2,8 +2,8 @@
 //! tests don't reach: malformed ranges, empty objects, delimiter/continuation corner cases, key and
 //! bucket validation boundaries, and capability inspection of malformed tokens.
 
-use ce_storage::caps::{inspect_link, Scope};
-use ce_storage::index::{valid_bucket_name, valid_key, Index, ObjectMeta};
+use ce_storage::caps::{Scope, inspect_link};
+use ce_storage::index::{Index, ObjectMeta, valid_bucket_name, valid_key};
 use ce_storage::range::parse_range;
 
 fn meta(cid: &str, size: u64) -> ObjectMeta {
@@ -131,7 +131,12 @@ fn list_mixed_keys_and_folders_under_prefix() {
     let mut idx = Index::default();
     idx.make_bucket("buk", 1).unwrap();
     // "photos/cover.jpg" is a direct key; "photos/2026/x" rolls into a folder.
-    for k in ["photos/cover.jpg", "photos/2026/a", "photos/2026/b", "photos/2025/c"] {
+    for k in [
+        "photos/cover.jpg",
+        "photos/2026/a",
+        "photos/2026/b",
+        "photos/2025/c",
+    ] {
         idx.put("buk", k, meta("c", 1)).unwrap();
     }
     let page = idx.list("buk", "photos/", Some("/"), None, 100).unwrap();
@@ -194,6 +199,65 @@ fn save_load_preserves_large_sizes() {
     let back = Index::load(&path).unwrap();
     assert_eq!(back.head("buk", "k").unwrap().size, big);
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn save_is_atomic_no_leftover_temp() {
+    // After a successful save the temp sidecar must be gone (renamed into place).
+    let dir = std::env::temp_dir().join(format!("ce-storage-atomic-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("buckets.json");
+    let mut idx = Index::default();
+    idx.make_bucket("buk", 1).unwrap();
+    idx.save(&path).unwrap();
+    assert!(path.exists(), "index file present after save");
+    let leftover = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| e.file_name().to_string_lossy().contains(".tmp"));
+    assert!(!leftover, "no .tmp leftover after atomic save");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn legacy_v1_index_without_new_fields_loads() {
+    // A pre-versioning index (no schema, no version_id/metadata on objects) must still load — the
+    // new fields default. This is the forward-compat / migration guarantee.
+    let path = std::env::temp_dir().join(format!("ce-storage-legacy-{}.json", std::process::id()));
+    // Schema 2 stores objects as version lists; but an *older* writer may have used the flat shape.
+    // We assert the current shape with defaults round-trips and that a missing `schema` defaults in.
+    let json = r#"{
+        "buckets": {
+            "buk": { "created": 1, "objects": {
+                "k": { "versions": [ { "meta": {
+                    "cid": "abc", "size": 3, "etag": "abc", "content_type": "text/plain",
+                    "last_modified": 9
+                }, "is_delete_marker": false } ] }
+            } }
+        }
+    }"#;
+    std::fs::write(&path, json).unwrap();
+    let idx = Index::load(&path).unwrap();
+    let m = idx.head("buk", "k").unwrap();
+    assert_eq!(m.cid, "abc");
+    assert_eq!(m.version_id, "", "missing version_id defaults to empty");
+    assert!(m.metadata.is_empty());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn versioning_history_and_markers() {
+    let mut idx = Index::default();
+    idx.make_bucket("buk", 1).unwrap();
+    idx.set_versioning("buk", true).unwrap();
+    idx.put("buk", "k", meta("v1", 1)).unwrap();
+    idx.put("buk", "k", meta("v2", 2)).unwrap();
+    assert_eq!(idx.head("buk", "k").unwrap().cid, "v2");
+    assert_eq!(idx.list_versions("buk", "k").unwrap().len(), 2);
+    idx.delete("buk", "k", 5).unwrap();
+    assert!(idx.head("buk", "k").is_err(), "delete marker hides current");
+    // The old versions are still addressable by id.
+    assert_eq!(idx.head_version("buk", "k", "v1").unwrap().cid, "v1");
 }
 
 // ---------- capability token inspection robustness ----------

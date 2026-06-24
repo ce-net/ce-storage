@@ -6,7 +6,7 @@
 //! computes that run purely (no network) so the client can swarm-fetch just those chunks and slice.
 //! Keeping it pure makes it trivially testable and reusable by both the CLI and the gateway.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use ce_rs::Manifest;
 
 /// A resolved byte range plus the chunk indices that cover it.
@@ -29,6 +29,15 @@ pub struct CoveringRange {
 ///
 /// Only a single range is supported (the common S3 case); multi-range is rejected. Returns an error
 /// for an unsatisfiable range, matching the HTTP 416 contract the gateway maps it to.
+///
+/// ```
+/// use ce_storage::range::parse_range;
+/// assert_eq!(parse_range("bytes=0-99", 1000).unwrap(), (0, 99));   // explicit window
+/// assert_eq!(parse_range("bytes=500-", 1000).unwrap(), (500, 999)); // open-ended → to end
+/// assert_eq!(parse_range("bytes=-100", 1000).unwrap(), (900, 999)); // suffix → last N bytes
+/// assert_eq!(parse_range("bytes=0-99999", 1000).unwrap(), (0, 999)); // end clamps to size-1
+/// assert!(parse_range("bytes=2000-3000", 1000).is_err());           // unsatisfiable → 416
+/// ```
 pub fn parse_range(header: &str, total_size: u64) -> Result<(u64, u64)> {
     let spec = header
         .trim()
@@ -48,7 +57,9 @@ pub fn parse_range(header: &str, total_size: u64) -> Result<(u64, u64)> {
     let (start, end) = match (a.trim(), b.trim()) {
         // bytes=-N  → last N bytes
         ("", suffix) => {
-            let n: u64 = suffix.parse().map_err(|_| anyhow::anyhow!("bad suffix length"))?;
+            let n: u64 = suffix
+                .parse()
+                .map_err(|_| anyhow::anyhow!("bad suffix length"))?;
             if n == 0 {
                 bail!("range not satisfiable: zero-length suffix");
             }
