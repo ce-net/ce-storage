@@ -46,9 +46,10 @@
 //! from content-addressed parts with no copy on completion), and **sealed objects** ([`seal`] —
 //! client-side encrypt-before-store with an authenticated cipher, the SSE-C analogue).
 //!
-//! **Deferred (documented, not faked):** true multi-host durability/pinning (the companion `ce-pin`
-//! app's job — [`Store::pin_hint`] exposes the CID for that handoff, but ce-storage does not pin
-//! itself); managed server-side keys (SSE-S3/SSE-KMS — the sealed-object mode is client-key only,
+//! **Deferred (documented, not faked):** true multi-host durability/pinning is available via the
+//! optional `replicated` feature (the merged `ce-bucket` — [`replicated::ReplicatedStore`]), which
+//! drives the companion `ce-pin` app; the core store does not pin itself ([`Store::pin_hint`] exposes
+//! the CID for that handoff); managed server-side keys (SSE-S3/SSE-KMS — the sealed-object mode is client-key only,
 //! the SSE-C analogue); AWS SigV4 (the `ce-cap` link is the auth mechanism instead); storage-class
 //! transitions (only expiration is implemented, not tiering); streaming bodies (objects are bounded
 //! and buffered, not streamed). See `ARCHITECTURE.md`.
@@ -75,6 +76,12 @@ pub mod multipart;
 pub mod range;
 pub mod seal;
 pub mod store;
+
+/// Durable replicated buckets (N-way, fault-domain-diverse; composes `ce-pin`) — the former
+/// `ce-bucket` crate. Off by default; enable with `--features replicated` so the core object store
+/// stays dependency-light.
+#[cfg(feature = "replicated")]
+pub mod replicated;
 
 #[cfg(feature = "gateway")]
 pub mod gateway;

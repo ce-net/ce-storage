@@ -202,6 +202,24 @@ which pins it across N hosts with payments and proof-of-retrievability. ce-stora
 **namespace + S3 verbs**; ce-pin owns **replication + availability**. This is the CE composition
 principle: each app does one thing over shared primitives.
 
+### Durable replicated buckets (feature `replicated` — the merged `ce-bucket`)
+
+The former standalone `ce-bucket` crate now lives here as the optional `replicated` module. Build
+with `--features replicated` to get `ReplicatedStore` (which composes this crate's `Store` with
+`ce-pin` for N-way, fault-domain-diverse durability + auto-repair) and the matching CLI verbs:
+
+```bash
+cargo build --release --features replicated
+ce-storage replicated mb backups --factor 3            # 3-way, fault-domain-diverse
+ce-storage replicated put backups db.sql ./db.sql      # store + replicate
+ce-storage replicated get backups db.sql -o ./out.sql  # CID-verified, mesh-aware
+ce-storage replicated maintain                         # audit + auto-repair to the factor
+```
+
+The feature is off by default so the core object store stays dependency-light (no `ce-pin`). The
+replica index defaults to `<config>/ce-bucket/replicas.json` (path kept for data compatibility with
+the pre-merge `ce-bucket` crate).
+
 ## Layout
 
 ```
@@ -215,6 +233,8 @@ src/
 ├── seal.rs       sealed (client-side encrypted) objects — encrypt-then-MAC over SHA-256 primitives
 ├── multipart.rs  multipart/resumable upload: in-flight state + content-addressed part assembly
 ├── store.rs      Store — the S3-verb library API over ce-rs + the index
+├── replicated/   (feature "replicated") the merged ce-bucket: ReplicatedStore + replica index,
+│                 composing Store with ce-pin for durable N-way storage + auto-repair
 ├── gateway.rs    (feature "gateway") S3-subset HTTP server with optional ce-cap enforcement
 └── main.rs       ce-storage CLI
 tests/

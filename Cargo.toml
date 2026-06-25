@@ -40,12 +40,19 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 directories = "5"
 # Optional tiny HTTP gateway exposing an S3-subset so existing S3 clients work.
 axum = { version = "0.7", optional = true }
+# Optional replication layer for the `replicated` module (the merged ce-bucket): fault-domain-diverse
+# placement, proof-of-retrievability, paid auto-repair. We DRIVE ce-pin — we do not reimplement it.
+ce-pin = { path = "../ce-pin", optional = true }
 
 [features]
 default = []
 # Build the `ce-storage gateway` subcommand (a tiny S3-subset HTTP server). Off by default so the
 # core library + CLI stay dependency-light; turn on with `--features gateway`.
 gateway = ["dep:axum"]
+# Build the durable replicated-bucket layer (the merged ce-bucket): the `replicated` module
+# (ReplicatedStore) + the `ce-storage replicated ...` CLI verbs, composing ce-pin. Off by default so
+# the core object store stays dependency-light; turn on with `--features replicated`.
+replicated = ["dep:ce-pin"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

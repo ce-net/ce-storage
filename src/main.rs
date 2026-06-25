@@ -156,6 +156,22 @@ enum Cmd {
         #[command(subcommand)]
         cmd: MultipartCmd,
     },
+    /// Durable replicated buckets: N-way, fault-domain-diverse storage that composes ce-pin (the
+    /// merged `ce-bucket`). Requires the `replicated` build feature.
+    #[cfg(feature = "replicated")]
+    Replicated {
+        /// Default replication factor for buckets without a policy.
+        #[arg(long, default_value_t = ce_storage::replicated::DEFAULT_REPLICATION_FACTOR)]
+        factor: u8,
+        /// Capability chain hex presented to pinning hosts (defaults to --caps/env/file via ce-pin).
+        #[arg(long)]
+        caps: Option<String>,
+        /// Override the replica index path (default: <config>/ce-bucket/replicas.json).
+        #[arg(long)]
+        replica_index: Option<PathBuf>,
+        #[command(subcommand)]
+        cmd: ReplicatedCmd,
+    },
     /// Run the S3-subset HTTP gateway (requires the `gateway` build feature).
     #[cfg(feature = "gateway")]
     Gateway {
@@ -240,6 +256,53 @@ enum LifecycleCmd {
         /// Bucket name.
         bucket: String,
     },
+}
+
+/// Replicated-bucket subcommands (the merged `ce-bucket` CLI). A thin shell over
+/// [`ce_storage::replicated::ReplicatedStore`]: parse arguments, drive the store, print results.
+#[cfg(feature = "replicated")]
+#[derive(Subcommand)]
+enum ReplicatedCmd {
+    /// Make a bucket, optionally setting its replication policy.
+    Mb {
+        bucket: String,
+        /// Replication factor policy for this bucket (defaults to the store default).
+        #[arg(long)]
+        factor: Option<u8>,
+    },
+    /// Store and replicate an object (factor: -r > policy > default).
+    Put {
+        bucket: String,
+        key: String,
+        /// Local file to upload.
+        file: PathBuf,
+        /// Replication factor for this object (overrides the bucket policy / default).
+        #[arg(short = 'r', long)]
+        replication: Option<u8>,
+        /// Content type (defaults to application/octet-stream).
+        #[arg(long, default_value = "application/octet-stream")]
+        content_type: String,
+    },
+    /// Fetch an object (CID-verified, mesh-aware).
+    Get {
+        bucket: String,
+        key: String,
+        /// Write to this file instead of stdout.
+        #[arg(short = 'o', long)]
+        out: Option<PathBuf>,
+    },
+    /// List objects in a bucket with their replica counts.
+    Ls {
+        bucket: String,
+        /// Key prefix filter.
+        #[arg(long, default_value = "")]
+        prefix: String,
+        /// Maximum keys to return.
+        #[arg(long, default_value_t = 1000)]
+        max_keys: usize,
+    },
+    /// Run one audit + auto-repair pass over every tracked object.
+    Maintain,
 }
 
 fn now() -> u64 {
@@ -687,6 +750,97 @@ async fn main() -> Result<()> {
                 println!("aborted upload {upload_id}");
             }
         },
+        #[cfg(feature = "replicated")]
+        Cmd::Replicated {
+            factor: default_factor,
+            caps,
+            replica_index,
+            cmd,
+        } => {
+            use ce_storage::replicated::{ReplicaIndex, ReplicatedStore};
+            let replica_index = replica_index.unwrap_or_else(ReplicaIndex::default_path);
+            // Resolve the capability chain via ce-pin (--caps flag, then $CE_PIN_CAPS, then caps file).
+            let caps = ce_pin::caps::resolve(caps.as_deref());
+            let mut store = ReplicatedStore::open(index_path, replica_index, caps)?
+                .with_default_factor(default_factor);
+            match cmd {
+                ReplicatedCmd::Mb { bucket, factor } => {
+                    store.make_bucket(&bucket, factor)?;
+                    let f = factor.unwrap_or(default_factor);
+                    println!("created bucket {bucket} (replication factor {f})");
+                }
+                ReplicatedCmd::Put {
+                    bucket,
+                    key,
+                    file,
+                    replication,
+                    content_type,
+                } => {
+                    let bytes = std::fs::read(&file)
+                        .with_context(|| format!("reading {}", file.display()))?;
+                    let report = store
+                        .put_object(&bucket, &key, &bytes, &content_type, replication)
+                        .await?;
+                    println!(
+                        "put {bucket}/{key}\n  cid:     {}\n  size:    {} bytes\n  factor:  {}\n  placed:  {} replica(s){}",
+                        report.cid,
+                        report.bytes_len,
+                        report.replication_factor,
+                        report.replica_hosts.len(),
+                        if report.replica_hosts.len() < report.replication_factor as usize {
+                            "  (under-replicated; run `ce-storage replicated maintain` to top up)"
+                        } else {
+                            ""
+                        },
+                    );
+                    for h in &report.replica_hosts {
+                        println!("    - {}", &h[..16.min(h.len())]);
+                    }
+                }
+                ReplicatedCmd::Get { bucket, key, out } => {
+                    let bytes = store.get_object(&bucket, &key).await?;
+                    match out {
+                        Some(path) => {
+                            std::fs::write(&path, &bytes)
+                                .with_context(|| format!("writing {}", path.display()))?;
+                            println!("wrote {} bytes to {}", bytes.len(), path.display());
+                        }
+                        None => {
+                            use std::io::Write;
+                            std::io::stdout().write_all(&bytes)?;
+                        }
+                    }
+                }
+                ReplicatedCmd::Ls {
+                    bucket,
+                    prefix,
+                    max_keys,
+                } => {
+                    let page = store.list_objects(&bucket, &prefix, max_keys)?;
+                    for (key, meta) in &page.keys {
+                        let replicas = store
+                            .index()
+                            .get_record(&bucket, key)
+                            .map(|r| format!("{}/{}", r.replica_hosts.len(), r.replication_factor))
+                            .unwrap_or_else(|| "-/-".to_string());
+                        println!("{key}\t{} bytes\treplicas {replicas}", meta.size);
+                    }
+                    for cp in &page.common_prefixes {
+                        println!("{cp}/");
+                    }
+                }
+                ReplicatedCmd::Maintain => {
+                    let report = store.maintain().await?;
+                    println!(
+                        "maintain: {} checked, {} repaired, {} replicas added, {} unhealthy",
+                        report.objects_checked,
+                        report.objects_repaired,
+                        report.replicas_added,
+                        report.replicas_unhealthy,
+                    );
+                }
+            }
+        }
         #[cfg(feature = "gateway")]
         Cmd::Gateway {
             bind,
