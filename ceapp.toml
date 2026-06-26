@@ -1,0 +1,27 @@
+# ce-storage — an S3/GCS-compatible object store over CE's content-addressed blobs,
+# installed through the one `ce` binary. `ce app install ce-storage`, then use the
+# S3-subset CLI (buckets/objects) or run `ce-storage gateway` for an S3 HTTP endpoint.
+
+[app]
+name    = "ce-storage"
+version = "0.1.0"
+summary = "S3/GCS-compatible object store over CE content-addressed blobs"
+runtime = "native"
+publisher = "c0be11e0ce0aaa769da6f9970244947d3d32a0c0d8302fb5f41f73d7950be456"
+
+[native]
+bin = "ce-storage"
+[native.artifacts]
+"darwin-amd64" = "f21072318392f4dcc684db68f1bcb743d7b63f18e6d799f8c7a65c41ebcd2389"
+"linux-amd64"  = "e8411819f3dc1f446698552029dc982487274566b5e456ef9585bd30e23b87d7"
+
+[deps]
+# Stores object bytes in the local node's content-addressed /blobs; presigned-equivalent
+# access links are ce-cap capabilities. The bucket index is a local JSON file.
+
+[sandbox]
+# A host CLI/gateway: it reads/writes a local index file and talks to the local node over
+# loopback (and, in `gateway` mode, binds a local S3 port). Not a gVisor container.
+tier       = "none"
+net        = "loopback"
+capability = "inherit"
