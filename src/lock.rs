@@ -51,7 +51,16 @@ impl FileLock {
                     let _ = writeln!(f, "{} {}", std::process::id(), unix_now());
                     return Ok(FileLock { path });
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // `AlreadyExists` is the normal "someone else holds it" signal. On Windows there is a
+                // second one: while another holder's `Drop` removes the sidecar, the file enters a
+                // "delete pending" state and a concurrent `create_new` fails with ACCESS_DENIED
+                // (os error 5 -> `PermissionDenied`) instead of ALREADY_EXISTS. Both mean "contended,
+                // back off and retry" — treating only the former as retryable made make_bucket /
+                // delete_object spuriously error under contention on Windows.
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::AlreadyExists
+                        || e.kind() == std::io::ErrorKind::PermissionDenied =>
+                {
                     if is_stale(&path) {
                         // Reclaim an orphaned lock and retry immediately.
                         let _ = std::fs::remove_file(&path);
