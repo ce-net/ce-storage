@@ -52,7 +52,7 @@ async fn gateway_user_metadata_and_headers() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri("/b1")
+                .uri("/bkt1")
                 .body(Body::empty())?,
         )
         .await?;
@@ -63,7 +63,7 @@ async fn gateway_user_metadata_and_headers() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri("/b1/k")
+                .uri("/bkt1/k")
                 .header("content-type", "text/plain")
                 .header("x-amz-meta-author", "leif")
                 .header("x-amz-meta-purpose", "test")
@@ -79,7 +79,7 @@ async fn gateway_user_metadata_and_headers() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/b1/k")
+                .uri("/bkt1/k")
                 .body(Body::empty())?,
         )
         .await?;
@@ -92,7 +92,7 @@ async fn gateway_user_metadata_and_headers() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("HEAD")
-                .uri("/b1/k")
+                .uri("/bkt1/k")
                 .body(Body::empty())?,
         )
         .await?;
@@ -119,7 +119,7 @@ async fn gateway_conditional_get_304() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri("/b")
+                .uri("/bkt")
                 .body(Body::empty())?,
         )
         .await?;
@@ -129,7 +129,7 @@ async fn gateway_conditional_get_304() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri("/b/k")
+                .uri("/bkt/k")
                 .body(Body::from("data"))?,
         )
         .await?;
@@ -142,7 +142,7 @@ async fn gateway_conditional_get_304() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/b/k")
+                .uri("/bkt/k")
                 .header("if-none-match", &etag)
                 .body(Body::empty())?,
         )
@@ -155,7 +155,7 @@ async fn gateway_conditional_get_304() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/b/k")
+                .uri("/bkt/k")
                 .header("if-none-match", "\"deadbeef\"")
                 .body(Body::empty())?,
         )
@@ -182,7 +182,7 @@ async fn gateway_unsatisfiable_range_416() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri("/b")
+                .uri("/bkt")
                 .body(Body::empty())?,
         )
         .await?;
@@ -191,7 +191,7 @@ async fn gateway_unsatisfiable_range_416() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri("/b/k")
+                .uri("/bkt/k")
                 .body(Body::from("12345"))?,
         )
         .await?;
@@ -200,7 +200,7 @@ async fn gateway_unsatisfiable_range_416() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/b/k")
+                .uri("/bkt/k")
                 .header("range", "bytes=900-999")
                 .body(Body::empty())?,
         )
@@ -226,7 +226,7 @@ async fn gateway_copy_and_bulk_delete() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri("/b")
+                .uri("/bkt")
                 .body(Body::empty())?,
         )
         .await?;
@@ -236,7 +236,7 @@ async fn gateway_copy_and_bulk_delete() -> anyhow::Result<()> {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri(format!("/b/{k}"))
+                    .uri(format!("/bkt/{k}"))
                     .body(Body::from("x"))?,
             )
             .await?;
@@ -248,8 +248,8 @@ async fn gateway_copy_and_bulk_delete() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri("/b/d")
-                .header("x-amz-copy-source", "/b/a")
+                .uri("/bkt/d")
+                .header("x-amz-copy-source", "/bkt/a")
                 .body(Body::empty())?,
         )
         .await?;
@@ -267,7 +267,7 @@ async fn gateway_copy_and_bulk_delete() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/b?delete")
+                .uri("/bkt?delete")
                 .body(Body::from("a\nb\nc"))?,
         )
         .await?;
@@ -284,7 +284,7 @@ async fn gateway_copy_and_bulk_delete() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("HEAD")
-                .uri("/b/d")
+                .uri("/bkt/d")
                 .body(Body::empty())?,
         )
         .await?;
@@ -310,7 +310,7 @@ async fn gateway_body_limit_413() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri("/b")
+                .uri("/bkt")
                 .body(Body::empty())?,
         )
         .await?;
@@ -319,7 +319,7 @@ async fn gateway_body_limit_413() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri("/b/big")
+                .uri("/bkt/big")
                 .body(Body::from(vec![0u8; 1024]))?,
         )
         .await?;
@@ -339,10 +339,10 @@ async fn gateway_versioning_roundtrip() -> anyhow::Result<()> {
     let index_path = temp_index("ver");
     let _ = std::fs::remove_file(&index_path);
     let mut store = Store::with_client(node.client.clone(), index_path.clone())?;
-    store.make_bucket("vb")?;
-    store.set_versioning("vb", true)?;
-    let v1 = store.put_object("vb", "k", b"one", "text/plain").await?;
-    let _v2 = store.put_object("vb", "k", b"two", "text/plain").await?;
+    store.make_bucket("verb")?;
+    store.set_versioning("verb", true)?;
+    let v1 = store.put_object("verb", "k", b"one", "text/plain").await?;
+    let _v2 = store.put_object("verb", "k", b"two", "text/plain").await?;
     let gw = Gateway::new(store);
 
     // Current is "two".
@@ -352,7 +352,7 @@ async fn gateway_versioning_roundtrip() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/vb/k")
+                .uri("/verb/k")
                 .body(Body::empty())?,
         )
         .await?;
@@ -365,7 +365,7 @@ async fn gateway_versioning_roundtrip() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/vb/k?versionId={}", v1.version_id))
+                .uri(format!("/verb/k?versionId={}", v1.version_id))
                 .body(Body::empty())?,
         )
         .await?;
@@ -378,7 +378,7 @@ async fn gateway_versioning_roundtrip() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/vb/k")
+                .uri("/verb/k")
                 .body(Body::empty())?,
         )
         .await?;
@@ -389,7 +389,7 @@ async fn gateway_versioning_roundtrip() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/vb/k")
+                .uri("/verb/k")
                 .body(Body::empty())?,
         )
         .await?;
@@ -403,7 +403,7 @@ async fn gateway_versioning_roundtrip() -> anyhow::Result<()> {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/vb/k?versionId={}", v1.version_id))
+                .uri(format!("/verb/k?versionId={}", v1.version_id))
                 .body(Body::empty())?,
         )
         .await?;

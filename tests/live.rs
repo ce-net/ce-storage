@@ -185,8 +185,8 @@ async fn live_versioning_metadata_and_conditionals() -> anyhow::Result<()> {
     let index_path = temp_index("vmc");
     let _ = std::fs::remove_file(&index_path);
     let mut store = Store::with_client(node.client.clone(), index_path.clone())?;
-    store.make_bucket("vb")?;
-    store.set_versioning("vb", true)?;
+    store.make_bucket("verb")?;
+    store.set_versioning("verb", true)?;
 
     // Put with user metadata + cache-control.
     let mut meta_map = std::collections::BTreeMap::new();
@@ -197,14 +197,14 @@ async fn live_versioning_metadata_and_conditionals() -> anyhow::Result<()> {
         cache_control: Some("max-age=30".into()),
         ..Default::default()
     };
-    let v1 = store.put_object_opts("vb", "k", b"one", &opts).await?;
-    let _v2 = store.put_object("vb", "k", b"two", "text/plain").await?;
+    let v1 = store.put_object_opts("verb", "k", b"one", &opts).await?;
+    let _v2 = store.put_object("verb", "k", b"two", "text/plain").await?;
 
     // Current is "two"; the old version "one" is retrievable by id, with its metadata.
-    let cur = store.get_object("vb", "k").await?;
+    let cur = store.get_object("verb", "k").await?;
     assert_eq!(cur.bytes, b"two");
     let old = store
-        .get_object_opts("vb", "k", Some(&v1.version_id), &Preconditions::default())
+        .get_object_opts("verb", "k", Some(&v1.version_id), &Preconditions::default())
         .await?;
     assert_eq!(old.bytes, b"one");
     assert_eq!(old.metadata.get("author").map(String::as_str), Some("leif"));
@@ -215,17 +215,17 @@ async fn live_versioning_metadata_and_conditionals() -> anyhow::Result<()> {
         if_none_match: Some(cur.etag.clone()),
         ..Default::default()
     };
-    let r = store.get_object_opts("vb", "k", None, &pc).await;
+    let r = store.get_object_opts("verb", "k", None, &pc).await;
     assert!(
         matches!(r, Err(ce_storage::store::StorageError::NotModified)),
         "matching If-None-Match must be NotModified"
     );
 
     // Delete adds a marker; current hidden, old version survives.
-    store.delete_object("vb", "k")?;
-    assert!(store.head_object("vb", "k").is_err());
+    store.delete_object("verb", "k")?;
+    assert!(store.head_object("verb", "k").is_err());
     let still = store
-        .get_object_opts("vb", "k", Some(&v1.version_id), &Preconditions::default())
+        .get_object_opts("verb", "k", Some(&v1.version_id), &Preconditions::default())
         .await?;
     assert_eq!(still.bytes, b"one");
 

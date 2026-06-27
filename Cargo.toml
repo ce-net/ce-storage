@@ -24,7 +24,7 @@ path = "src/main.rs"
 # The CE SDK: blobs/objects (put_blob/get_blob/put_object/get_object), content-addressing.
 ce-rs = { path = "../ce-rs" }
 # The capability verifier primitive — bucket/prefix scoping + presigned-equivalent access links.
-ce-cap = { path = "../ce/crates/ce-cap" }
+ce-iam-core = { path = "../ce-iam/crates/ce-iam-core" }
 # Identity: minting capability links requires a signing key; loaded from the CE data dir.
 ce-identity = { path = "../ce/crates/ce-identity" }
 

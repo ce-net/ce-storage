@@ -9,11 +9,14 @@ summary = "S3/GCS-compatible object store over CE content-addressed blobs"
 runtime = "native"
 publisher = "c0be11e0ce0aaa769da6f9970244947d3d32a0c0d8302fb5f41f73d7950be456"
 
+[build]
+features = ["gateway"]
+
 [native]
 bin = "ce-storage"
 [native.artifacts]
-"darwin-amd64" = "f21072318392f4dcc684db68f1bcb743d7b63f18e6d799f8c7a65c41ebcd2389"
-"linux-amd64"  = "e8411819f3dc1f446698552029dc982487274566b5e456ef9585bd30e23b87d7"
+"darwin-amd64" = "9a3f7669daaefcd30602d738fc91800dedf56ef4ebc487872bab09bec18eaa05"
+"linux-amd64"  = "f650051bc398c825985d022935d900cfe69a75a43cbfce7da6a09d6b284b1f09"
 
 [deps]
 # Stores object bytes in the local node's content-addressed /blobs; presigned-equivalent
@@ -25,3 +28,8 @@ bin = "ce-storage"
 tier       = "none"
 net        = "loopback"
 capability = "inherit"
+
+[daemon]
+enabled = true
+args    = ["gateway", "--bind", "127.0.0.1:9000"]
+restart = "on-failure"

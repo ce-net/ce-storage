@@ -6,7 +6,7 @@
 //! abilities are `["storage:read"]` (opaque app strings — CE assigns them no meaning), whose
 //! resource is the owning node, and whose caveats carry the expiry (`not_after`) and the
 //! bucket/prefix scope (`path_prefix`). The holder presents the token; any honoring node verifies
-//! it offline in microseconds via [`ce_cap::authorize`], with no policy server and no shared
+//! it offline in microseconds via [`ce_iam_core::authorize`], with no policy server and no shared
 //! secret. Re-delegation (attenuation) is free: a holder can narrow the prefix and hand it on.
 //!
 //! Abilities used by this app (opaque to `ce-cap`):
@@ -19,7 +19,7 @@
 //! app caveat the app honors. [`scope_allows`] implements that check.
 
 use anyhow::{Context, Result};
-use ce_cap::{Caveats, Resource, SignedCapability};
+use ce_iam_core::{Caveats, Resource, SignedCapability};
 use ce_identity::{Identity, NodeId};
 
 /// Ability string: read objects under the scoped prefix.
@@ -125,13 +125,13 @@ pub fn mint_link(
         nonce,
         None,
     );
-    Ok(ce_cap::encode_chain(&[cap]))
+    Ok(ce_iam_core::encode_chain(&[cap]))
 }
 
 /// Decode a link token back into its chain, returning the leaf capability's scope and abilities for
 /// inspection. Does not verify the signature/expiry — call [`verify_link`] for that.
 pub fn inspect_link(token: &str) -> Result<(Vec<String>, Scope)> {
-    let chain = ce_cap::decode_chain(token).context("decoding capability link")?;
+    let chain = ce_iam_core::decode_chain(token).context("decoding capability link")?;
     let leaf = chain.last().context("empty capability chain")?;
     let scope = leaf
         .cap
@@ -164,9 +164,9 @@ pub fn verify_link(
     token: &str,
     is_revoked: &dyn Fn(&NodeId, u64) -> bool,
 ) -> Result<(), String> {
-    let chain = ce_cap::decode_chain(token).map_err(|e| e.to_string())?;
+    let chain = ce_iam_core::decode_chain(token).map_err(|e| e.to_string())?;
     // ce-cap enforces signatures, attenuation, expiry, revocation, and that the leaf grants `ability`.
-    ce_cap::authorize(
+    ce_iam_core::authorize(
         self_id,
         accepted_roots,
         self_tags,

@@ -129,9 +129,32 @@ pub struct ObjectVersion {
 /// The full history for one key: an ordered list of versions, newest **last**. On an unversioned
 /// bucket there is exactly one (non-delete-marker) version; on a versioned bucket the list grows.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "ObjectEntryCompat")]
 pub struct ObjectEntry {
     /// Versions in write order (newest last).
     pub versions: Vec<ObjectVersion>,
+}
+
+/// Backward-compatible deserialization. The current on-disk shape is `{ "versions": [ ... ] }`, but an
+/// index written by the pre-versioning store stored a BARE [`ObjectMeta`] per key (`{cid,size,etag,...}`).
+/// Accept both so an old `buckets.json` loads (each legacy entry becomes a single, non-delete version)
+/// instead of failing with "missing field `versions`".
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum ObjectEntryCompat {
+    Versioned { versions: Vec<ObjectVersion> },
+    Legacy(ObjectMeta),
+}
+
+impl From<ObjectEntryCompat> for ObjectEntry {
+    fn from(c: ObjectEntryCompat) -> Self {
+        match c {
+            ObjectEntryCompat::Versioned { versions } => ObjectEntry { versions },
+            ObjectEntryCompat::Legacy(meta) => {
+                ObjectEntry { versions: vec![ObjectVersion { meta, is_delete_marker: false }] }
+            }
+        }
+    }
 }
 
 impl ObjectEntry {
