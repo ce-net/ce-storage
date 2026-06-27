@@ -33,6 +33,21 @@ jobs:
           repository: ce-net/ce
           path: ce
 
+      # Path dependency: ce-iam-core lives inside ce-net/ce-iam (../ce-iam/crates/ce-iam-core)
+      - name: Checkout ce-iam
+        uses: actions/checkout@v4
+        with:
+          repository: ce-net/ce-iam
+          path: ce-iam
+
+      # Optional path dependency ce-pin (../ce-pin) — cargo reads its manifest during dependency
+      # resolution even when the optional feature is off, so it must be present.
+      - name: Checkout ce-pin
+        uses: actions/checkout@v4
+        with:
+          repository: ce-net/ce-pin
+          path: ce-pin
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
