@@ -40,6 +40,13 @@ jobs:
           repository: ce-net/ce-iam
           path: ce-iam
 
+      # Transitive path dependency: ce-iam-core depends on ce-secrets-rs (../ce-secrets-rs)
+      - name: Checkout ce-secrets-rs
+        uses: actions/checkout@v4
+        with:
+          repository: ce-net/ce-secrets-rs
+          path: ce-secrets-rs
+
       # Optional path dependency ce-pin (../ce-pin) — cargo reads its manifest during dependency
       # resolution even when the optional feature is off, so it must be present.
       - name: Checkout ce-pin
